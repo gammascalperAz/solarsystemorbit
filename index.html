@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solar System Visualization with 2D/3D Toggle</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: Arial, sans-serif; }
+        canvas { display: block; }
+        #controls { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; color: white; }
+        button { padding: 5px 10px; margin: 5px; }
+        #speedControl { display: flex; align-items: center; margin-top: 10px; }
+        #speedSlider { width: 200px; margin: 0 10px; }
+        #currentSpeed { font-size: 14px; }
+        #infoPanel { position: absolute; bottom: 10px; left: 0; right: 0; color: white; background: rgba(0,0,0,0.7); padding: 10px; text-align: center; }
+        #yearsElapsed { font-size: 18px; font-weight: bold; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <div>
+            <button id="resetButton">Reset Time</button>
+            <button id="pauseButton">Pause</button>
+            <button id="toggleViewButton">Toggle 2D/3D</button>
+        </div>
+        <div id="speedControl">
+            <span>Slow</span>
+            <input type="range" id="speedSlider" min="-2" max="2" step="0.1" value="0">
+            <span>Fast</span>
+        </div>
+        <div id="currentSpeed"></div>
+    </div>
+    <div id="infoPanel">
+        <div id="yearsElapsed"></div>
+    </div>
+    <canvas id="solarSystem"></canvas>
+    <script>
+        const canvas = document.getElementById('solarSystem');
+        const ctx = canvas.getContext('2d');
+        const yearsElapsedDiv = document.getElementById('yearsElapsed');
+        const resetButton = document.getElementById('resetButton');
+        const pauseButton = document.getElementById('pauseButton');
+        const toggleViewButton = document.getElementById('toggleViewButton');
+        const speedSlider = document.getElementById('speedSlider');
+        const currentSpeedDiv = document.getElementById('currentSpeed');
+
+        // Set canvas size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // Constants
+        const CENTER_X = canvas.width / 2;
+        const CENTER_Y = canvas.height / 2;
+        const PERSPECTIVE = 800; // Perspective distance
+        let SCALE = 50; // Base scale factor
+        let speedFactor = 1; // 1 year per second
+        let isPaused = false;
+        let is3D = true;
+        let lastTimestamp = 0;
+        let accumulatedYears = 0;
+
+        // Planet data
+        const planets = [
+            { name: 'Mercury', color: '#8C7853', a: 0.387098, period: 0.240846, size: 0.383 },
+            { name: 'Venus', color: '#FFA500', a: 0.723332, period: 0.615198, size: 0.949 },
+            { name: 'Earth', color: '#4169E1', a: 1.000000, period: 1.000000, size: 1.000 },
+            { name: 'Mars', color: '#FF4500', a: 1.523679, period: 1.880932, size: 0.532 },
+            { name: 'Jupiter', color: '#FFA07A', a: 5.203546, period: 11.862615, size: 11.209 },
+            { name: 'Saturn', color: '#F4E99B', a: 9.537070, period: 29.447498, size: 9.449 },
+            { name: 'Uranus', color: '#40E0D0', a: 19.189165, period: 84.016846, size: 4.007 },
+            { name: 'Neptune', color: '#4169E1', a: 30.069923, period: 164.791315, size: 3.883 }
+        ];
+
+        // Create starfield
+        const stars = Array(200).fill().map(() => ({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            z: Math.random() * 1000
+        }));
+
+        // Function to calculate planet position
+        function calculatePosition(planet, years) {
+            const angle = (years / planet.period) * 2 * Math.PI;
+            const x = planet.a * Math.cos(angle);
+            const y = planet.a * Math.sin(angle);
+            return { x, y };
+        }
+
+        // Function to calculate 3D position
+        function calculate3DPosition(planet, years) {
+            const angle = (years / planet.period) * 2 * Math.PI;
+            const x = planet.a * Math.cos(angle);
+            const y = planet.a * Math.sin(angle) * 0.3; // Flatten the orbit
+            const z = planet.a * Math.sin(angle);
+            return { x, y, z };
+        }
+
+        // Function to project 3D to 2D
+        function project(x, y, z) {
+            const scale = PERSPECTIVE / (PERSPECTIVE + z);
+            return {
+                x: CENTER_X + x * SCALE * scale,
+                y: CENTER_Y + y * SCALE * scale,
+                scale: scale
+            };
+        }
+
+        // Function to draw a planet (2D)
+        function drawPlanet2D(x, y, size, color) {
+            ctx.beginPath();
+            ctx.arc(x, y, size, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+        }
+
+        // Function to draw a planet with shading (3D)
+        function drawPlanet3D(x, y, size, color, scale) {
+            const gradient = ctx.createRadialGradient(x, y, 0, x, y, size * scale);
+            gradient.addColorStop(0, color);
+            gradient.addColorStop(1, 'black');
+            ctx.beginPath();
+            ctx.arc(x, y, size * scale, 0, Math.PI * 2);
+            ctx.fillStyle = gradient;
+            ctx.fill();
+        }
+
+        // Function to draw an orbit
+        function drawOrbit(radius) {
+            ctx.beginPath();
+            for (let i = 0; i < 360; i++) {
+                const angle = i * (Math.PI / 180);
+                const x = radius * Math.cos(angle);
+                const y = radius * Math.sin(angle);
+                if (is3D) {
+                    const y3D = y * 0.3; // Flatten for 3D
+                    const projected = project(x, y3D, 0);
+                    if (i === 0) ctx.moveTo(projected.x, projected.y);
+                    else ctx.lineTo(projected.x, projected.y);
+                } else {
+                    if (i === 0) ctx.moveTo(CENTER_X + x, CENTER_Y + y);
+                    else ctx.lineTo(CENTER_X + x, CENTER_Y + y);
+                }
+            }
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.stroke();
+        }
+
+        // Function to draw the solar system
+        function drawSolarSystem(years) {
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (is3D) {
+                // Draw stars for 3D view
+                ctx.fillStyle = 'white';
+                stars.forEach(star => {
+                    const projected = project(star.x - CENTER_X, star.y - CENTER_Y, star.z);
+                    ctx.fillRect(projected.x, projected.y, 1, 1);
+                });
+            }
+
+            // Draw sun
+            if (is3D) {
+                drawPlanet3D(CENTER_X, CENTER_Y, 5, '#FFD700', 1);
+            } else {
+                drawPlanet2D(CENTER_X, CENTER_Y, 5, '#FFD700');
+            }
+
+            // Draw planets and their orbits
+            planets.forEach(planet => {
+                drawOrbit(planet.a * SCALE);
+
+                if (is3D) {
+                    const position = calculate3DPosition(planet, years);
+                    const projected = project(position.x, position.y, position.z);
+                    drawPlanet3D(projected.x, projected.y, planet.size * 2, planet.color, projected.scale);
+                } else {
+                    const position = calculatePosition(planet, years);
+                    drawPlanet2D(CENTER_X + position.x * SCALE, CENTER_Y + position.y * SCALE, planet.size * 2, planet.color);
+                }
+            });
+            
+            // Update years elapsed display
+            yearsElapsedDiv.textContent = `Years: ${Math.floor(years)}`;
+        }
+
+        // Animation loop
+        function animate(currentTime) {
+            if (!isPaused) {
+                const deltaTime = (currentTime - lastTimestamp) / 1000; // in seconds
+                accumulatedYears += deltaTime * speedFactor;
+                drawSolarSystem(accumulatedYears);
+            }
+            lastTimestamp = currentTime;
+            requestAnimationFrame(animate);
+        }
+
+        // Reset functionality
+        resetButton.addEventListener('click', () => {
+            accumulatedYears = 0;
+            lastTimestamp = performance.now();
+        });
+
+        // Pause functionality
+        pauseButton.addEventListener('click', () => {
+            isPaused = !isPaused;
+            if (!isPaused) {
+                lastTimestamp = performance.now();
+            }
+            pauseButton.textContent = isPaused ? 'Resume' : 'Pause';
+        });
+
+        // Toggle view functionality
+        toggleViewButton.addEventListener('click', () => {
+            is3D = !is3D;
+            toggleViewButton.textContent = is3D ? 'Switch to 2D' : 'Switch to 3D';
+        });
+
+        // Speed control
+        speedSlider.addEventListener('input', function() {
+            speedFactor = Math.pow(10, this.value);
+            updateSpeedDisplay();
+        });
+
+        function updateSpeedDisplay() {
+            const speedText = speedFactor.toFixed(2) + ' yr/s';
+            currentSpeedDiv.textContent = `Current speed: ${speedText}`;
+        }
+
+        // Resize handler
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            CENTER_X = canvas.width / 2;
+            CENTER_Y = canvas.height / 2;
+        });
+
+        // Initialize speed display
+        updateSpeedDisplay();
+
+        // Start the animation
+        lastTimestamp = performance.now();
+        animate(lastTimestamp);
+    </script>
+</body>
+</html>
